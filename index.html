@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="el">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Σύγκριση Τιμών Supermarket</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-inner">
+      <div class="logo">
+        <svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <rect width="28" height="28" rx="8" fill="#1a6b4a"/>
+          <path d="M6 9h2l2.5 9 2-6 2 6 2.5-9H19" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="21" cy="18" r="2.5" fill="#fff"/>
+          <circle cx="21" cy="10" r="2.5" fill="#fff"/>
+        </svg>
+        <span>KaloKalatho</span>
+      </div>
+      <span class="header-sub">Σύγκριση τιμών supermarket</span>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- LEFT COLUMN: grocery list -->
+    <section class="panel panel-list">
+      <div class="panel-head">
+        <h2>Λίστα αγορών</h2>
+        <span class="badge" id="listCount">0 προϊόντα</span>
+      </div>
+
+      <div class="search-wrap">
+        <div class="search-input-row">
+          <input
+            type="text"
+            id="searchInput"
+            placeholder="Αναζήτηση προϊόντος..."
+            autocomplete="off"
+            aria-label="Αναζήτηση προϊόντος"
+          />
+          <button class="btn-icon" id="searchBtn" aria-label="Αναζήτηση">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.5"/><path d="M11 11l3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+        <div id="searchResults" class="search-results" role="listbox" aria-label="Αποτελέσματα αναζήτησης"></div>
+      </div>
+
+      <ul id="groceryList" class="grocery-list" aria-label="Λίστα αγορών">
+        <li class="list-empty" id="listEmpty">
+          <svg width="40" height="40" viewBox="0 0 40 40" fill="none" aria-hidden="true"><rect x="8" y="12" width="24" height="20" rx="3" stroke="#c5c5c5" stroke-width="1.5"/><path d="M14 12V9a6 6 0 0 1 12 0v3" stroke="#c5c5c5" stroke-width="1.5" stroke-linecap="round"/><path d="M14 20h12M14 26h8" stroke="#c5c5c5" stroke-width="1.5" stroke-linecap="round"/></svg>
+          <p>Προσθέστε προϊόντα στη λίστα σας</p>
+        </li>
+      </ul>
+
+      <div class="panel-footer">
+        <button class="btn-primary" id="compareBtn" disabled>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2 12l4-4 3 3 5-7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Σύγκριση τιμών
+        </button>
+      </div>
+    </section>
+
+    <!-- RIGHT COLUMN: comparison results -->
+    <section class="panel panel-results">
+      <div class="panel-head">
+        <h2>Αποτελέσματα</h2>
+        <span id="resultsStatus" class="status-label"></span>
+      </div>
+
+      <div id="resultsPlaceholder" class="results-placeholder">
+        <svg width="56" height="56" viewBox="0 0 56 56" fill="none" aria-hidden="true"><rect x="8" y="28" width="8" height="20" rx="2" fill="#e0e0e0"/><rect x="20" y="18" width="8" height="30" rx="2" fill="#c8c8c8"/><rect x="32" y="8" width="8" height="40" rx="2" fill="#b0b0b0"/><rect x="44" y="22" width="8" height="26" rx="2" fill="#d4d4d4"/></svg>
+        <p>Προσθέστε προϊόντα και πατήστε «Σύγκριση τιμών»</p>
+      </div>
+
+      <div id="loadingState" class="loading-state" style="display:none">
+        <div class="spinner-ring" aria-hidden="true"></div>
+        <p id="loadingMsg">Ανάκτηση τιμών...</p>
+      </div>
+
+      <div id="comparisonResults" style="display:none">
+        <!-- store cards -->
+        <div class="section-title">Σύνολο καλαθιού ανά αλυσίδα</div>
+        <div id="storeCards" class="store-cards"></div>
+
+        <!-- optimal box -->
+        <div id="optimalBox" class="optimal-box"></div>
+
+        <!-- tab: breakdown / details -->
+        <div class="tabs-row">
+          <button class="tab-btn active" data-tab="breakdown">Ανάλυση τιμών</button>
+          <button class="tab-btn" data-tab="savings">Εξοικονόμηση</button>
+        </div>
+        <div id="tabBreakdown" class="tab-content active"></div>
+        <div id="tabSavings" class="tab-content"></div>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" role="alert" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
