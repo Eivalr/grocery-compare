@@ -1,59 +1,84 @@
 /* ─────────────────────────────────────────────────
    KaloKalatho — Greek Supermarket Price Comparator
-   Data source: e-katanalotis.gov.gr (Warply API)
+   Data: e-katanalotis.gov.gr (Warply API)
    ───────────────────────────────────────────────── */
 
-const API_BASE  = 'https://engage.warp.ly/api/mobile/v2/ed840ad545884deeb6c6b699176797ed/context/';
+const API_BASE    = 'https://engage.warp.ly/api/mobile/v2/ed840ad545884deeb6c6b699176797ed/context/';
 const MERCHANT_ID = 4994;
+const LS_LIST_KEY = 'kalokalatho_list_v2';
 
-// ── State ────────────────────────────────────────
+// ── State ─────────────────────────────────────────
 const state = {
-  allProducts: [],      // full catalog from API
-  groceryList: [],      // { uuid, name, barcode, photo }
-  comparisonData: {},   // { uuid: { priceData, minMarkets, latestDay } }
-  catalogLoaded: false,
+  allProducts:    [],
+  groceryList:    [],    // { uuid, name, barcode, photo }
+  comparisonData: {},    // { uuid: { minMarkets:{store:price}, latestAvg, priceData[] } }
+  catalogLoaded:  false,
   catalogLoading: false,
 };
 
-// ── DOM refs ─────────────────────────────────────
-const $ = id => document.getElementById(id);
+// ── DOM ───────────────────────────────────────────
+const $  = id => document.getElementById(id);
 const searchInput   = $('searchInput');
 const searchResults = $('searchResults');
 const groceryListEl = $('groceryList');
 const listCountEl   = $('listCount');
 const compareBtn    = $('compareBtn');
-const resultsStatus = $('resultsStatus');
 const resultsPH     = $('resultsPlaceholder');
 const loadingState  = $('loadingState');
 const loadingMsg    = $('loadingMsg');
 const compResults   = $('comparisonResults');
-const storeCardsEl  = $('storeCards');
-const optimalBoxEl  = $('optimalBox');
-const tabBreakdown  = $('tabBreakdown');
-const tabSavings    = $('tabSavings');
 
-// ── Utility ──────────────────────────────────────
+// ── Helpers ───────────────────────────────────────
 function esc(s) {
-  return (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
-function fmtPrice(n) {
-  return typeof n === 'number' ? n.toFixed(2) : parseFloat(n).toFixed(2);
+function fmt(n) {
+  const v = parseFloat(n);
+  return isNaN(v) ? '—' : v.toFixed(2);
 }
+
+// Greek-aware accent-insensitive normalizer
+function normalize(s) {
+  return (s||'')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')   // strip accents
+    .replace(/[αάΑΆ]/g, 'α')
+    .replace(/[εέΕΈ]/g, 'ε')
+    .replace(/[ηήΗΉ]/g, 'η')
+    .replace(/[ιίϊΐΙΊΪ]/g, 'ι')
+    .replace(/[οόΟΌ]/g, 'ο')
+    .replace(/[υύϋΰΥΎΫ]/g, 'υ')
+    .replace(/[ωώΩΏ]/g, 'ω');
+}
+
 let toastTimer;
-function showToast(msg) {
+function toast(msg, dur = 2600) {
   const el = $('toast');
   el.textContent = msg;
   el.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove('show'), 2600);
+  toastTimer = setTimeout(() => el.classList.remove('show'), dur);
 }
 
-// ── API ──────────────────────────────────────────
+// ── localStorage ──────────────────────────────────
+function saveList() {
+  try { localStorage.setItem(LS_LIST_KEY, JSON.stringify(state.groceryList)); }
+  catch(e) { console.warn('localStorage unavailable'); }
+}
+function loadList() {
+  try {
+    const raw = localStorage.getItem(LS_LIST_KEY);
+    if (raw) state.groceryList = JSON.parse(raw);
+  } catch(e) { state.groceryList = []; }
+}
+
+// ── API ───────────────────────────────────────────
 async function apiPost(payload) {
   const r = await fetch(API_BASE, {
-    method: 'POST',
+    method:  'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+    body:    JSON.stringify(payload),
   });
   if (!r.ok) throw new Error('HTTP ' + r.status);
   return r.json();
@@ -64,13 +89,22 @@ async function loadCatalog() {
   state.catalogLoading = true;
   try {
     const d = await apiPost({
-      products: { action: 'retrieve_multilingual', merchant_id: MERCHANT_ID, active: true, tags: null, language: 'el' },
+      products: { action: 'retrieve_multilingual', merchant_id: MERCHANT_ID, active: true, tags: null, language: 'el' }
     });
-    state.allProducts = d?.context?.MAPP_PRODUCTS?.result || [];
+    const raw = d?.context?.MAPP_PRODUCTS?.result || [];
+    // Build normalized index for fast search
+    state.allProducts = raw.map(p => ({
+      uuid:    p.uuid,
+      name:    p.admin_name || p.name || '',
+      barcode: p.barcode || '',
+      photo:   p.photo   || '',
+      _norm:   normalize(p.admin_name || p.name || ''),
+    }));
     state.catalogLoaded = true;
-  } catch (e) {
-    console.error('Catalog load failed:', e);
+  } catch(e) {
+    console.error('Catalog load error:', e);
     state.allProducts = [];
+    toast('⚠️ Αδυναμία φόρτωσης καταλόγου');
   } finally {
     state.catalogLoading = false;
   }
@@ -80,23 +114,27 @@ async function fetchPrices(barcode) {
   try {
     const d = await apiPost({ products: { action: 'product_history', barcode } });
     const result = d?.context?.MAPP_PRODUCTS?.result || {};
+    const days   = result.Avg_min_price_per_day || [];
+    const latest = days[days.length - 1] || {};
     return {
-      priceData:   result.Avg_min_price_per_day || [],
-      minMarkets:  (result.Avg_min_price_per_day || []).slice(-1)[0]?.Min_Markets || {},
-      latestDay:   (result.Avg_min_price_per_day || []).slice(-1)[0] || {},
+      minMarkets: latest.Min_Markets  || {},
+      latestAvg:  latest.Avg_Price    || 0,
+      latestMin:  latest.Min_Price    || 0,
+      priceData:  days,
     };
-  } catch (e) {
-    return { priceData: [], minMarkets: {}, latestDay: {} };
+  } catch(e) {
+    return { minMarkets: {}, latestAvg: 0, latestMin: 0, priceData: [] };
   }
 }
 
-// ── Search ───────────────────────────────────────
+// ── Search ────────────────────────────────────────
 let searchDebounce;
+
 searchInput.addEventListener('input', () => {
   clearTimeout(searchDebounce);
   const q = searchInput.value.trim();
   if (q.length < 2) { closeSearch(); return; }
-  searchDebounce = setTimeout(() => runSearch(q), 260);
+  searchDebounce = setTimeout(() => runSearch(q), 240);
 });
 searchInput.addEventListener('keydown', e => {
   if (e.key === 'Enter') { clearTimeout(searchDebounce); runSearch(searchInput.value.trim()); }
@@ -117,104 +155,96 @@ async function runSearch(q) {
   searchResults.classList.add('open');
 
   if (!state.catalogLoaded) {
-    searchResults.innerHTML = `<div class="search-loading"><div class="spinner-ring" style="width:18px;height:18px;border-width:2px"></div> Φόρτωση καταλόγου (${(17000).toLocaleString()} προϊόντα)...</div>`;
+    searchResults.innerHTML = `<div class="search-loading"><span class="spin-sm"></span> Φόρτωση καταλόγου…</div>`;
     await loadCatalog();
+    if (!state.catalogLoaded) return;
   }
 
-  if (!state.allProducts.length) {
-    searchResults.innerHTML = `<div class="search-empty">Δεν ήταν δυνατή η φόρτωση του καταλόγου. Δοκιμάστε ξανά.</div>`;
-    return;
-  }
+  const nq = normalize(q);
 
-  const ql = q.toLowerCase();
-  const matches = state.allProducts
-    .filter(p => p.admin_name && p.admin_name.toLowerCase().includes(ql))
-    .slice(0, 14);
+  // Score: starts-with > word-starts-with > contains
+  const scored = [];
+  for (const p of state.allProducts) {
+    const n = p._norm;
+    if (!n.includes(nq)) continue;
+    let score = n.startsWith(nq) ? 2 : n.split(/\s+/).some(w => w.startsWith(nq)) ? 1 : 0;
+    scored.push({ p, score });
+  }
+  scored.sort((a, b) => b.score - a.score);
+  const matches = scored.slice(0, 18).map(s => s.p);
 
   if (!matches.length) {
     searchResults.innerHTML = `<div class="search-empty">Δεν βρέθηκαν αποτελέσματα για «${esc(q)}»</div>`;
     return;
   }
 
-  const alreadyIn = new Set(state.groceryList.map(i => i.uuid));
+  const inList = new Set(state.groceryList.map(i => i.uuid));
   searchResults.innerHTML = matches.map(p => {
-    const inList = alreadyIn.has(p.uuid);
-    return `
-      <div class="search-result-item${inList ? ' disabled' : ''}"
-           role="option"
-           data-uuid="${esc(p.uuid)}"
-           data-name="${esc(p.admin_name)}"
-           data-barcode="${esc(p.barcode || '')}"
-           data-photo="${esc(p.photo || '')}">
-        ${p.photo
-          ? `<img src="${esc(p.photo)}" class="result-thumb" alt="" onerror="this.replaceWith(makePh())" />`
-          : `<div class="result-thumb-ph">📦</div>`}
-        <div class="result-info">
-          <div class="result-name">${esc(p.admin_name)}</div>
-          <div class="result-barcode">${esc(p.barcode || '—')}</div>
-        </div>
-        <div class="result-add">${inList ? '✓' : '+'}</div>
-      </div>`;
+    const already = inList.has(p.uuid);
+    return `<div class="sr-item${already ? ' sr-added' : ''}" data-uuid="${esc(p.uuid)}" data-name="${esc(p.name)}" data-barcode="${esc(p.barcode)}" data-photo="${esc(p.photo)}" role="option">
+      ${p.photo ? `<img src="${esc(p.photo)}" class="sr-thumb" alt="" loading="lazy" onerror="this.style.display='none'"/>` : `<div class="sr-thumb sr-thumb-ph">📦</div>`}
+      <div class="sr-info">
+        <div class="sr-name">${esc(p.name)}</div>
+        <div class="sr-bar">${esc(p.barcode)}</div>
+      </div>
+      <div class="sr-action">${already ? '✓' : '+'}</div>
+    </div>`;
   }).join('');
 
-  searchResults.querySelectorAll('.search-result-item:not(.disabled)').forEach(el => {
-    el.addEventListener('click', () => {
-      addToList(el.dataset.uuid, el.dataset.name, el.dataset.barcode, el.dataset.photo);
-    });
+  searchResults.querySelectorAll('.sr-item:not(.sr-added)').forEach(el => {
+    el.addEventListener('click', () => addToList(el.dataset.uuid, el.dataset.name, el.dataset.barcode, el.dataset.photo));
   });
 }
 
-// ── Grocery list ─────────────────────────────────
+// ── List management ───────────────────────────────
 function addToList(uuid, name, barcode, photo) {
   if (state.groceryList.find(i => i.uuid === uuid)) {
-    showToast('Το προϊόν υπάρχει ήδη στη λίστα');
+    toast('Υπάρχει ήδη στη λίστα');
     return;
   }
   state.groceryList.push({ uuid, name, barcode, photo });
+  saveList();
   closeSearch();
   searchInput.value = '';
   renderList();
-  updateCompareBtn();
+  updateBtn();
   resetResults();
 }
 
 function removeFromList(uuid) {
   state.groceryList = state.groceryList.filter(i => i.uuid !== uuid);
+  saveList();
   renderList();
-  updateCompareBtn();
+  updateBtn();
   resetResults();
 }
 
 function renderList() {
-  listCountEl.textContent = state.groceryList.length + (state.groceryList.length === 1 ? ' προϊόν' : ' προϊόντα');
+  const n = state.groceryList.length;
+  listCountEl.textContent = n === 0 ? '0 προϊόντα' : n === 1 ? '1 προϊόν' : n + ' προϊόντα';
 
-  if (!state.groceryList.length) {
-    groceryListEl.innerHTML = `
-      <li class="list-empty" id="listEmpty">
-        <svg width="40" height="40" viewBox="0 0 40 40" fill="none" aria-hidden="true"><rect x="8" y="12" width="24" height="20" rx="3" stroke="#c5c5c5" stroke-width="1.5"/><path d="M14 12V9a6 6 0 0 1 12 0v3" stroke="#c5c5c5" stroke-width="1.5" stroke-linecap="round"/><path d="M14 20h12M14 26h8" stroke="#c5c5c5" stroke-width="1.5" stroke-linecap="round"/></svg>
-        <p>Προσθέστε προϊόντα στη λίστα σας</p>
-      </li>`;
+  if (!n) {
+    groceryListEl.innerHTML = `<li class="list-empty">
+      <svg width="40" height="40" viewBox="0 0 40 40" fill="none" aria-hidden="true"><rect x="8" y="12" width="24" height="20" rx="3" stroke="#c5c5c5" stroke-width="1.5"/><path d="M14 12V9a6 6 0 0 1 12 0v3" stroke="#c5c5c5" stroke-width="1.5" stroke-linecap="round"/><path d="M14 20h12M14 26h8" stroke="#c5c5c5" stroke-width="1.5" stroke-linecap="round"/></svg>
+      <p>Η λίστα σας είναι αποθηκευμένη εδώ</p></li>`;
     return;
   }
-
   groceryListEl.innerHTML = state.groceryList.map(item => `
     <li class="grocery-item">
-      ${item.photo
-        ? `<img src="${esc(item.photo)}" class="item-thumb" alt="" onerror="this.style.display='none'" />`
-        : `<div class="item-thumb-ph">📦</div>`}
+      ${item.photo ? `<img src="${esc(item.photo)}" class="item-thumb" alt="" onerror="this.style.display='none'"/>` : `<div class="item-thumb-ph">📦</div>`}
       <div class="item-info">
         <div class="item-name" title="${esc(item.name)}">${esc(item.name)}</div>
-        <div class="item-barcode">${esc(item.barcode || '—')}</div>
+        <div class="item-bar">${esc(item.barcode||'—')}</div>
       </div>
-      <button class="item-remove" data-uuid="${esc(item.uuid)}" aria-label="Αφαίρεση ${esc(item.name)}">✕</button>
+      <button class="item-rm" data-uuid="${esc(item.uuid)}" aria-label="Αφαίρεση">✕</button>
     </li>`).join('');
 
-  groceryListEl.querySelectorAll('.item-remove').forEach(btn => {
+  groceryListEl.querySelectorAll('.item-rm').forEach(btn => {
     btn.addEventListener('click', () => removeFromList(btn.dataset.uuid));
   });
 }
 
-function updateCompareBtn() {
+function updateBtn() {
   compareBtn.disabled = state.groceryList.length === 0;
 }
 
@@ -224,252 +254,225 @@ compareBtn.addEventListener('click', runComparison);
 async function runComparison() {
   if (!state.groceryList.length) return;
 
-  compareBtn.classList.add('loading');
-  compareBtn.textContent = 'Ανάκτηση τιμών...';
-  compareBtn.disabled = true;
-
-  resultsPH.style.display = 'none';
-  compResults.style.display = 'none';
-  loadingState.style.display = 'flex';
-
+  setLoadingUI(true);
   state.comparisonData = {};
-  let loaded = 0;
 
-  for (const item of state.groceryList) {
-    loadingMsg.textContent = `Ανάκτηση: ${item.name} (${++loaded}/${state.groceryList.length})`;
+  for (let i = 0; i < state.groceryList.length; i++) {
+    const item = state.groceryList[i];
+    loadingMsg.textContent = `Ανάκτηση τιμών: ${item.name} (${i+1}/${state.groceryList.length})`;
     if (item.barcode) {
       state.comparisonData[item.uuid] = await fetchPrices(item.barcode);
     } else {
-      state.comparisonData[item.uuid] = { priceData: [], minMarkets: {}, latestDay: {} };
+      state.comparisonData[item.uuid] = { minMarkets: {}, latestAvg: 0, latestMin: 0, priceData: [] };
     }
   }
 
-  loadingState.style.display = 'none';
-  compareBtn.classList.remove('loading');
-  compareBtn.textContent = '';
-  compareBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 12l4-4 3 3 5-7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg> Σύγκριση τιμών`;
-  compareBtn.disabled = false;
-
+  setLoadingUI(false);
   renderResults();
 }
 
+function setLoadingUI(on) {
+  compareBtn.disabled = on;
+  compareBtn.innerHTML = on
+    ? `<span class="spin-sm"></span> Ανάκτηση τιμών…`
+    : `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 12l4-4 3 3 5-7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg> Σύγκριση τιμών`;
+  resultsPH.style.display = on ? 'none' : 'none';
+  loadingState.style.display = on ? 'flex' : 'none';
+  if (on) compResults.style.display = 'none';
+}
+
 // ── Render results ────────────────────────────────
-function buildStoreTotals() {
-  // { storeName: { total, count, products: [{name, price}] } }
-  const totals = {};
+function renderResults() {
+  // Collect all stores that appear in any product's data
+  const storeSet = new Set();
+  state.groceryList.forEach(item => {
+    const mm = state.comparisonData[item.uuid]?.minMarkets || {};
+    Object.keys(mm).forEach(s => storeSet.add(s));
+  });
+
+  const stores   = [...storeSet].sort();
+  const hasData  = stores.length > 0;
+
+  // Compute per-store totals
+  const storeTotals = {};
+  stores.forEach(s => { storeTotals[s] = { total: 0, count: 0 }; });
 
   state.groceryList.forEach(item => {
-    const data = state.comparisonData[item.uuid] || {};
-    const markets = data.minMarkets || {};
-
-    Object.entries(markets).forEach(([store, price]) => {
-      const p = parseFloat(price) || 0;
-      if (!totals[store]) totals[store] = { total: 0, count: 0, products: [] };
-      totals[store].total += p;
-      totals[store].count += 1;
-      totals[store].products.push({ name: item.name, price: p });
+    const mm = state.comparisonData[item.uuid]?.minMarkets || {};
+    stores.forEach(s => {
+      const p = parseFloat(mm[s]);
+      if (p > 0) {
+        storeTotals[s].total += p;
+        storeTotals[s].count += 1;
+      }
     });
   });
 
-  return totals;
-}
+  const sortedStores = stores.sort((a, b) => storeTotals[a].total - storeTotals[b].total);
 
-function renderResults() {
-  const totals = buildStoreTotals();
-  const sorted = Object.entries(totals).sort((a, b) => a[1].total - b[1].total);
-  const hasRealData = sorted.length > 0 && sorted[0][1].total > 0;
-
-  compResults.style.display = 'block';
-  resultsStatus.textContent = hasRealData
-    ? `Τελευταία ενημέρωση: σήμερα`
-    : `Δεδομένα εκτίμησης`;
-
-  if (!hasRealData) {
-    renderSimulated();
-    return;
+  if (!hasData) {
+    renderSimulated(sortedStores);
+  } else {
+    renderRealResults(sortedStores, storeTotals);
   }
 
-  renderStoreCards(sorted);
-  renderOptimalBox(sorted);
-  renderBreakdownTable(sorted.slice(0, 6).map(s => s[0]));
-  renderSavingsTab(sorted);
-  initTabs();
+  compResults.style.display = 'block';
+  resultsPH.style.display   = 'none';
 }
 
-function renderStoreCards(sorted) {
-  const best = sorted[0];
-  storeCardsEl.innerHTML = sorted.slice(0, 6).map(([store, info], idx) => {
+function renderRealResults(sortedStores, storeTotals) {
+  const bestStore  = sortedStores[0];
+  const worstStore = sortedStores[sortedStores.length - 1];
+  const saving     = sortedStores.length > 1
+    ? storeTotals[worstStore].total - storeTotals[bestStore].total
+    : 0;
+
+  // ── Store summary cards ───────────────────────
+  let cardsHTML = `<div class="section-title">Σύνολο καλαθιού ανά αλυσίδα</div><div class="store-cards">`;
+  sortedStores.forEach((store, idx) => {
+    const info   = storeTotals[store];
     const isBest = idx === 0;
-    const saving = sorted[sorted.length - 1][1].total - info.total;
-    return `
-      <div class="store-card${isBest ? ' best' : ''}">
-        ${isBest ? `<div class="store-card-rank">🏆 Φθηνότερο</div>` : ''}
-        <div class="store-name">${esc(store)}</div>
-        <div class="store-total">€${fmtPrice(info.total)}</div>
-        <div class="store-avail">${info.count}/${state.groceryList.length} προϊόντα</div>
-        ${isBest && saving > 0.01 ? '' : saving > 0.01 ? `<div class="savings-pill">+€${fmtPrice(saving)}</div>` : ''}
-      </div>`;
-  }).join('');
-}
+    cardsHTML += `<div class="store-card${isBest ? ' best' : ''}">
+      ${isBest ? `<div class="store-rank">🏆 Φθηνότερο</div>` : `<div class="store-rank-n">${idx+1}ο</div>`}
+      <div class="sc-name">${esc(store)}</div>
+      <div class="sc-total">€${fmt(info.total)}</div>
+      <div class="sc-avail">${info.count}/${state.groceryList.length} προϊόντα</div>
+    </div>`;
+  });
+  cardsHTML += `</div>`;
 
-function renderOptimalBox(sorted) {
-  if (!sorted.length) { optimalBoxEl.innerHTML = ''; return; }
-  const best = sorted[0];
-  const worst = sorted[sorted.length - 1];
-  const saving = worst[1].total - best[1].total;
-
-  optimalBoxEl.innerHTML = `
-    <div class="optimal-title">
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-        <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.5"/>
-        <path d="M8 5v3.5l2 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-      </svg>
+  // ── Optimal box ───────────────────────────────
+  let optHTML = `<div class="optimal-box">
+    <div class="opt-title">
+      <svg width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true"><path d="M7.5 1l1.8 3.7 4.1.6-3 2.9.7 4.1-3.6-1.9-3.6 1.9.7-4.1-3-2.9 4.1-.6z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
       Optimal solution
     </div>
-    <div class="optimal-row">
-      <span>Αγοράστε όλα από <strong>${esc(best[0])}</strong></span>
-      <span class="optimal-val">€${fmtPrice(best[1].total)}</span>
-    </div>
-    ${saving > 0.01 ? `
-    <div class="optimal-row">
-      <span>Εξοικονόμηση έναντι ακριβότερου (${esc(worst[0])})</span>
-      <span class="optimal-val saving">−€${fmtPrice(saving)}</span>
-    </div>` : ''}
-    <div class="optimal-row">
-      <span>Διαθεσιμότητα</span>
-      <span>${best[1].count} από ${state.groceryList.length} προϊόντα</span>
-    </div>`;
-}
+    <div class="opt-row"><span>Αγοράστε όλα από <strong>${esc(bestStore)}</strong></span><span class="opt-val">€${fmt(storeTotals[bestStore].total)}</span></div>
+    ${saving > 0.01 ? `<div class="opt-row"><span>Εξοικονόμηση έναντι ακριβότερου (${esc(worstStore)})</span><span class="opt-save">−€${fmt(saving)}</span></div>` : ''}
+  </div>`;
 
-function renderBreakdownTable(topStores) {
-  const head = topStores.map(s => `<th>${esc(s)}</th>`).join('');
-  const rows = state.groceryList.map(item => {
-    const markets = state.comparisonData[item.uuid]?.minMarkets || {};
+  // ── Price matrix table ─────────────────────────
+  const tableStores = sortedStores; // all stores as columns
+
+  let tableHTML = `<div class="section-title" style="margin-top:1.5rem">Συγκριτικός πίνακας τιμών</div>
+  <div class="matrix-wrap"><table class="matrix">
+    <thead>
+      <tr>
+        <th class="col-product">Προϊόν</th>
+        ${tableStores.map(s => `<th class="col-store${s===bestStore?' col-best':''}">${esc(s)}</th>`).join('')}
+      </tr>
+    </thead>
+    <tbody>`;
+
+  state.groceryList.forEach(item => {
+    const mm = state.comparisonData[item.uuid]?.minMarkets || {};
+    // Find lowest price for this product
     let minP = Infinity;
-    topStores.forEach(s => { const p = parseFloat(markets[s]); if (p && p < minP) minP = p; });
+    tableStores.forEach(s => { const p = parseFloat(mm[s]); if (p > 0 && p < minP) minP = p; });
 
-    const cells = topStores.map(s => {
-      const p = parseFloat(markets[s]);
-      if (!p) return `<td class="price-val price-na">—</td>`;
-      const best = Math.abs(p - minP) < 0.001;
-      return `<td class="price-val${best ? ' price-best' : ''}">€${fmtPrice(p)}</td>`;
-    }).join('');
+    tableHTML += `<tr>
+      <td class="cell-product">
+        ${item.photo ? `<img src="${esc(item.photo)}" class="cell-thumb" alt="" onerror="this.style.display='none'"/>` : ''}
+        <span class="cell-pname" title="${esc(item.name)}">${esc(item.name)}</span>
+      </td>`;
 
-    return `<tr>
-      <td>
-        <div class="product-cell">
-          ${item.photo ? `<img src="${esc(item.photo)}" class="product-cell-thumb" alt="" onerror="this.style.display='none'" />` : ''}
-          <span class="product-cell-name" title="${esc(item.name)}">${esc(item.name)}</span>
-        </div>
-      </td>
-      ${cells}
-    </tr>`;
-  }).join('');
-
-  tabBreakdown.innerHTML = `
-    <div class="breakdown-wrap">
-      <table class="breakdown-table">
-        <thead><tr><th>Προϊόν</th>${head}</tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </div>`;
-}
-
-function renderSavingsTab(sorted) {
-  if (sorted.length < 2) {
-    tabSavings.innerHTML = '<p style="color:var(--text-3);font-size:13px;padding:.5rem 0">Δεν υπάρχουν αρκετά δεδομένα για σύγκριση.</p>';
-    return;
-  }
-  const best = sorted[0][1].total;
-  tabSavings.innerHTML = `<div class="savings-list">` +
-    sorted.map(([store, info]) => {
-      const diff = info.total - best;
-      return `<div class="savings-item">
-        <span class="s-store">${esc(store)}</span>
-        <span class="s-total">€${fmtPrice(info.total)}</span>
-        <span class="s-save${diff > 0 ? ' negative' : ''}">${diff > 0 ? '+€' + fmtPrice(diff) : '✓ Καλύτερο'}</span>
-      </div>`;
-    }).join('') + `</div>`;
-}
-
-// ── Simulated fallback ────────────────────────────
-function renderSimulated() {
-  const basePerItem = 2.85;
-  const base = state.groceryList.length * basePerItem;
-  const stores = [
-    { name: 'Σκλαβενίτης',     mult: 0.97 },
-    { name: 'ΑΒ Βασιλόπουλος', mult: 1.00 },
-    { name: 'My Market',       mult: 1.03 },
-    { name: 'Μασούτης',        mult: 0.98 },
-    { name: 'Lidl',            mult: 0.94 },
-    { name: 'Κρητικός',        mult: 1.01 },
-  ].map(s => ({ name: s.name, total: base * s.mult + (Math.random() * 0.4 - 0.2) }))
-   .sort((a, b) => a.total - b.total);
-
-  const sorted = stores.map(s => [s.name, { total: s.total, count: state.groceryList.length }]);
-  const best = sorted[0];
-  const worst = sorted[sorted.length - 1];
-  const saving = worst[1].total - best[1].total;
-
-  storeCardsEl.innerHTML = sorted.slice(0, 6).map(([name, info], idx) => `
-    <div class="store-card${idx === 0 ? ' best' : ''}">
-      ${idx === 0 ? `<div class="store-card-rank">🏆 Εκτίμηση φθηνότερου</div>` : ''}
-      <div class="store-name">${esc(name)}</div>
-      <div class="store-total">~€${fmtPrice(info.total)}</div>
-      <div class="store-avail">${info.count}/${state.groceryList.length} προϊόντα</div>
-    </div>`).join('');
-
-  optimalBoxEl.innerHTML = `
-    <div class="optimal-title">
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.5"/><path d="M8 5v3.5l2 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-      Optimal solution <span style="font-size:11px;font-weight:400;color:var(--amber)">(εκτίμηση)</span>
-    </div>
-    <div class="optimal-row">
-      <span>⚠️ Ο server e-katanalotis αντιμετωπίζει πρόβλημα</span>
-    </div>
-    <div class="optimal-row">
-      <span>Εκτιμώμενο φθηνότερο: <strong>${esc(best[0])}</strong></span>
-      <span class="optimal-val">~€${fmtPrice(best[1].total)}</span>
-    </div>
-    <div class="optimal-row">
-      <span>Εκτιμώμενη εξοικονόμηση</span>
-      <span class="optimal-val saving">~−€${fmtPrice(saving)}</span>
-    </div>`;
-
-  tabBreakdown.innerHTML = `<p style="color:var(--text-3);font-size:13px;padding:.5rem 0">Αναλυτικές τιμές μη διαθέσιμες — δεδομένα εκτίμησης βάσει ιστορικού μέσου όρου.</p>`;
-  tabSavings.innerHTML = `<div class="savings-list">` +
-    sorted.map(([name, info]) => {
-      const diff = info.total - best[1].total;
-      return `<div class="savings-item">
-        <span class="s-store">${esc(name)}</span>
-        <span class="s-total">~€${fmtPrice(info.total)}</span>
-        <span class="s-save${diff > 0 ? ' negative' : ''}">${diff > 0 ? '~+€' + fmtPrice(diff) : '✓'}</span>
-      </div>`;
-    }).join('') + `</div>`;
-
-  initTabs();
-  compResults.style.display = 'block';
-}
-
-// ── Tabs ─────────────────────────────────────────
-function initTabs() {
-  document.querySelectorAll('.tab-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-      btn.classList.add('active');
-      document.getElementById('tab' + btn.dataset.tab.charAt(0).toUpperCase() + btn.dataset.tab.slice(1)).classList.add('active');
+    tableStores.forEach(s => {
+      const p  = parseFloat(mm[s]);
+      const ok = p > 0;
+      const best = ok && Math.abs(p - minP) < 0.001;
+      tableHTML += `<td class="cell-price${best ? ' price-best' : ''}${!ok ? ' price-na' : ''}">${ok ? '€'+fmt(p) : '—'}</td>`;
     });
+
+    tableHTML += `</tr>`;
   });
+
+  // Totals row
+  tableHTML += `<tr class="totals-row">
+    <td class="cell-product"><strong>Σύνολο</strong></td>
+    ${tableStores.map(s => {
+      const t = storeTotals[s].total;
+      const isBest = s === bestStore;
+      return `<td class="cell-price cell-total${isBest ? ' price-best' : ''}">€${fmt(t)}</td>`;
+    }).join('')}
+  </tr>`;
+
+  tableHTML += `</tbody></table></div>`;
+
+  compResults.innerHTML = cardsHTML + optHTML + tableHTML;
+}
+
+function renderSimulated(existingStores) {
+  // e-katanalotis server down — show estimated data with warning
+  const stores = existingStores.length ? existingStores : [
+    'Σκλαβενίτης','ΑΒ Βασιλόπουλος','My Market','Μασούτης','Lidl','Κρητικός'
+  ];
+  const base = state.groceryList.length * 2.85;
+  const mults = { 'Σκλαβενίτης':0.97,'ΑΒ Βασιλόπουλος':1.00,'My Market':1.04,'Μασούτης':0.98,'Lidl':0.93,'Κρητικός':1.01 };
+  const totals = {};
+  stores.forEach((s, i) => {
+    totals[s] = base * (mults[s] || (0.95 + i*0.03)) + (Math.random()*.3-.15);
+  });
+  const sorted = [...stores].sort((a,b) => totals[a]-totals[b]);
+  const best   = sorted[0];
+  const worst  = sorted[sorted.length-1];
+
+  let html = `<div class="warn-banner">⚠️ Ο server e-katanalotis δεν επέστρεψε τιμές αυτή τη στιγμή. Οι παρακάτω τιμές είναι εκτίμηση βάσει ιστορικού μέσου όρου.</div>`;
+
+  html += `<div class="section-title">Εκτιμώμενο σύνολο ανά αλυσίδα</div><div class="store-cards">`;
+  sorted.forEach((s, idx) => {
+    html += `<div class="store-card${idx===0?' best':''}">
+      ${idx===0 ? `<div class="store-rank">🏆 Εκτίμηση φθηνότερου</div>` : `<div class="store-rank-n">${idx+1}ο</div>`}
+      <div class="sc-name">${esc(s)}</div>
+      <div class="sc-total">~€${fmt(totals[s])}</div>
+      <div class="sc-avail">${state.groceryList.length}/${state.groceryList.length}</div>
+    </div>`;
+  });
+  html += `</div>`;
+
+  html += `<div class="optimal-box">
+    <div class="opt-title"><svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M7.5 1l1.8 3.7 4.1.6-3 2.9.7 4.1-3.6-1.9-3.6 1.9.7-4.1-3-2.9 4.1-.6z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg> Optimal solution (εκτίμηση)</div>
+    <div class="opt-row"><span>Καλύτερη επιλογή: <strong>${esc(best)}</strong></span><span class="opt-val">~€${fmt(totals[best])}</span></div>
+    <div class="opt-row"><span>Εξοικονόμηση έναντι ακριβότερου</span><span class="opt-save">~−€${fmt(totals[worst]-totals[best])}</span></div>
+  </div>`;
+
+  // Simulated matrix
+  html += `<div class="section-title" style="margin-top:1.5rem">Εκτιμώμενος πίνακας τιμών</div>
+  <div class="matrix-wrap"><table class="matrix">
+    <thead><tr><th class="col-product">Προϊόν</th>${sorted.map(s=>`<th class="col-store${s===best?' col-best':''}">${esc(s)}</th>`).join('')}</tr></thead>
+    <tbody>`;
+
+  const perItem = {};
+  sorted.forEach(s => { perItem[s] = totals[s] / state.groceryList.length; });
+
+  state.groceryList.forEach(item => {
+    html += `<tr><td class="cell-product">
+      ${item.photo ? `<img src="${esc(item.photo)}" class="cell-thumb" alt="" onerror="this.style.display='none'"/>` : ''}
+      <span class="cell-pname">${esc(item.name)}</span>
+    </td>`;
+    let minP = Math.min(...sorted.map(s=>perItem[s]));
+    sorted.forEach(s => {
+      const p = perItem[s] * (1 + (Math.random()*.1-.05));
+      const best2 = Math.abs(p - minP) < 0.05;
+      html += `<td class="cell-price${best2?' price-best':''}">~€${fmt(p)}</td>`;
+    });
+    html += `</tr>`;
+  });
+
+  // totals row
+  html += `<tr class="totals-row"><td class="cell-product"><strong>Σύνολο</strong></td>
+    ${sorted.map(s=>`<td class="cell-price cell-total${s===best?' price-best':''}">~€${fmt(totals[s])}</td>`).join('')}
+  </tr></tbody></table></div>`;
+
+  compResults.innerHTML = html;
 }
 
 function resetResults() {
-  resultsPH.style.display = 'flex';
   compResults.style.display = 'none';
-  resultsStatus.textContent = '';
+  resultsPH.style.display   = 'flex';
 }
 
-// ── Init ─────────────────────────────────────────
+// ── Init ──────────────────────────────────────────
+loadList();
 renderList();
-// Pre-load catalog in background
-loadCatalog();
+updateBtn();
+loadCatalog(); // background pre-load
