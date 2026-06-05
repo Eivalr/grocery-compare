@@ -1,7 +1,7 @@
 /* ─────────────────────────────────────────────────────────────
    KaloKalatho — Greek Supermarket Price Comparator
    Data: warply.s3.amazonaws.com  (e-katanalotis.gov.gr)
-   2904 products · prices per store · updated every 12h
+   2904 products · prices per store · updated every 12h · v4
    ───────────────────────────────────────────────────────────── */
 
 const CID_INTERVAL = 432e5; // 12h cache-busting
@@ -99,6 +99,10 @@ async function loadData() {
     }));
 
     state.loaded  = true;
+
+    // Update header status
+    const statusEl = document.getElementById('catalogStatus');
+    if (statusEl) statusEl.textContent = state.products.length.toLocaleString('el') + ' προϊόντα';
   } catch(e) {
     console.error('Data load error:', e);
     toast('⚠️ Αδυναμία φόρτωσης δεδομένων — δοκιμάστε ξανά');
