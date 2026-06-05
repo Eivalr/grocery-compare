@@ -1,7 +1,7 @@
 /* ─────────────────────────────────────────────────────────────
    KaloKalatho — Greek Supermarket Price Comparator
    Data: warply.s3.amazonaws.com  (e-katanalotis.gov.gr)
-   2904 products · prices per store · updated every 12h · v4
+   2904 products · prices per store · updated every 12h · v5
    ───────────────────────────────────────────────────────────── */
 
 const CID_INTERVAL = 432e5; // 12h cache-busting
@@ -9,7 +9,7 @@ const PRICES_URL   = () => {
   const cid = CID_INTERVAL * Math.floor(Date.now() / CID_INTERVAL);
   return `https://warply.s3.amazonaws.com/applications/ed840ad545884deeb6c6b699176797ed/basket-retailers/prices.json?cid=${cid}`;
 };
-const LS_LIST_KEY = 'kalokalatho_v3';
+const LS_LIST_KEY = 'kalokalatho_v4';
 
 // ── State ─────────────────────────────────────────────────────
 const state = {
@@ -162,7 +162,7 @@ async function runSearch(q) {
   }
 
   const inList = new Set(state.groceryList.map(i => i.barcode));
-  searchResults.innerHTML = matches.map(p => {
+  const items = matches.map(p => {
     const already = inList.has(p.barcode);
     const imgSrc  = p.image;
     return `<div class="sr-item${already ? ' sr-added' : ''}"
@@ -180,6 +180,7 @@ async function runSearch(q) {
       <div class="sr-action">${already ? '✓' : '+'}</div>
     </div>`;
   }).join('');
+  searchResults.innerHTML = `<div class="sr-list">${items}</div>`;
 
   searchResults.querySelectorAll('.sr-item:not(.sr-added)').forEach(el => {
     el.addEventListener('click', () => addToList(el.dataset.barcode, el.dataset.name, el.dataset.image));
