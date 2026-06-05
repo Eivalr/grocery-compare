@@ -8,7 +8,7 @@ const PRICES_URL   = () => {
   const cid = CID_INTERVAL * Math.floor(Date.now() / CID_INTERVAL);
   return `https://warply.s3.amazonaws.com/applications/ed840ad545884deeb6c6b699176797ed/basket-retailers/prices.json?cid=${cid}`;
 };
-const LS_KEY = 'kalokalatho_v4';
+const LS_KEY = 'kalokalatho_v6';
 
 // ── State ─────────────────────────────────────────────────────
 const state = {
@@ -415,6 +415,12 @@ function renderResults() {
 
   html += `</tbody></table></div>`;
   html += `<div class="data-notice">Δεδομένα: <a href="https://e-katanalotis.gov.gr" target="_blank" rel="noopener">e-katanalotis.gov.gr</a> · Ενημέρωση κάθε 12ώρες · ${new Date().toLocaleDateString('el-GR')}</div>`;
+  html += `<div class="export-row">
+    <button class="btn-export" id="exportPdfBtn" onclick="exportPDF()">
+      <svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M3 1h6l3 3v10H3V1z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M9 1v3h3" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M5 7h5M5 9.5h5M5 12h3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+      Αποθήκευση ως PDF
+    </button>
+  </div>`;
 
   compResults.innerHTML  = html;
   compResults.style.display = 'block';
@@ -424,6 +430,20 @@ function renderResults() {
 function resetResults() {
   compResults.style.display = 'none';
   resultsPH.style.display   = 'flex';
+}
+
+// ── Export PDF ───────────────────────────────────────────────
+function exportPDF() {
+  // Set print title with date
+  const date = new Date().toLocaleDateString('el-GR');
+  const count = state.groceryList.length;
+  document.title = `KaloKalatho — Σύγκριση τιμών ${date}`;
+  // Small delay so title updates before print dialog
+  setTimeout(() => {
+    window.print();
+    // Restore title
+    setTimeout(() => { document.title = 'KaloKalatho — Σύγκριση τιμών supermarket'; }, 1000);
+  }, 100);
 }
 
 // ── Init ──────────────────────────────────────────────────────
