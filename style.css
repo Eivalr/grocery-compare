@@ -285,3 +285,9 @@ body {
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 4px; }
+
+/* additions */
+.sc-save { font-size: 11px; color: var(--green); font-weight: 600; margin-top: 3px; }
+.data-notice { font-size: 11px; color: var(--text-3); margin-top: 1.25rem; text-align: right; }
+.data-notice a { color: var(--green); text-decoration: none; }
+.data-notice a:hover { text-decoration: underline; }
