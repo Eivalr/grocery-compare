@@ -1,5 +1,5 @@
 /* ─────────────────────────────────────────────────────────────
-   KaloKalatho v6 — Greek Supermarket Price Comparator
+   Grosharee v8 — Greek Supermarket Price Comparator
    Data: warply.s3.amazonaws.com (e-katanalotis.gov.gr)
    ───────────────────────────────────────────────────────────── */
 
@@ -8,7 +8,7 @@ const PRICES_URL   = () => {
   const cid = CID_INTERVAL * Math.floor(Date.now() / CID_INTERVAL);
   return `https://warply.s3.amazonaws.com/applications/ed840ad545884deeb6c6b699176797ed/basket-retailers/prices.json?cid=${cid}`;
 };
-const LS_KEY = 'kalokalatho_v6';
+const LS_KEY = 'grosharee_v1';
 
 // ── State ─────────────────────────────────────────────────────
 const state = {
@@ -437,12 +437,12 @@ function exportPDF() {
   // Set print title with date
   const date = new Date().toLocaleDateString('el-GR');
   const count = state.groceryList.length;
-  document.title = `KaloKalatho — Σύγκριση τιμών ${date}`;
+  document.title = `Grosharee — Σύγκριση τιμών ${date}`;
   // Small delay so title updates before print dialog
   setTimeout(() => {
     window.print();
     // Restore title
-    setTimeout(() => { document.title = 'KaloKalatho — Σύγκριση τιμών supermarket'; }, 1000);
+    setTimeout(() => { document.title = 'Grosharee — Σύγκριση τιμών supermarket'; }, 1000);
   }, 100);
 }
 
